@@ -1,0 +1,12 @@
+[package]
+categories = ["development-tools::debugging"]
+description = "A logging impementation for `log` with graphics in the terminal"
+name = "glug"
+version = "0.1.0"
+edition = "2021"
+keywords = ["logging","log", "logger"]
+license = "MIT"
+
+[dependencies]
+log = "0.4.21"
+termsize = "0.1.6"
