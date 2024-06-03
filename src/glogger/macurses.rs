@@ -19,7 +19,6 @@ macro_rules! color {
     };
 }
 #[repr(usize)]
-#[derive(Debug, Clone, Copy)]
 ///the numbers for the basic ANSI colors set by the terminal. These are the **widely used** colors for
 ///the terminal, not specific ones. They **may not be the right color** as they are terminal
 ///dependent.
@@ -32,7 +31,16 @@ pub enum Ansi8 {
     Magenta = 35,
     Cyan = 36,
     White = 37,
+    ///not to be confused with Default
     Default = 39,
+    ///not to be confused with Default
     Reset = 0,
+}
+use Ansi8::*;
+pub fn background_match(col: Ansi8) -> usize {
+    match col {
+        Reset => 0,
+        _ => col as usize + 10,
+    }
 }
 pub(crate) use {clear_to_eol, color, set_cursor};
