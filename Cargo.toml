@@ -1,6 +1,6 @@
 [package]
 categories = ["development-tools::debugging"]
-description = "A logging impementation for `log` with graphics in the terminal"
+description = "A logging impementation for  log  with graphics in the terminal"
 name = "glug"
 version = "0.1.0"
 edition = "2021"
