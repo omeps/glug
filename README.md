@@ -1,6 +1,6 @@
 # glug: a logger with graphical elements.
 
-![logger in use] (https://raw.githubusercontent.com/omeps/glug/master/logger_in_use.png)  
+
 
 the sidebar
 the sidebar (the meat and potatoes of glug) will show you 
