@@ -1,13 +1,14 @@
-#[macro_use]
 mod macurses;
 use log::{set_logger, Level, Log, Record};
 pub use macurses::Ansi8;
 use macurses::Ansi8::*;
+use macurses::*;
 use std::sync::mpsc;
 use std::sync::mpsc::channel;
 use std::sync::OnceLock;
 use std::{thread, usize};
 type LogMessage = Result<(String, Level), GLoggerSignal>;
+///The logger. Use setup() to initiate and end() to stop.
 #[derive(Clone)]
 pub struct GLogger {
     channel: OnceLock<mpsc::Sender<LogMessage>>,
@@ -51,6 +52,19 @@ impl Log for GLogger {
     }
 }
 impl GLogger {
+    ///sets up the logger. The JoinHandle can
+    ///be used to wait for writing to end, and the logger can tell the writing thread to
+    ///end.
+    ///**The writing thread will only end if told to.**
+    ///# Examples
+    ///```
+    ///fn main() {
+    ///    let (writer, logger) = glug::GLogger::setup();
+    ///    log::info!("logged a message");
+    ///    logger.end();
+    ///    writer.join().unwrap();
+    ///}
+    ///```
     pub fn setup() -> (thread::JoinHandle<()>, &'static GLogger) {
         static LOGGER: GLogger = GLogger {
             channel: OnceLock::new(),
@@ -79,6 +93,16 @@ impl GLogger {
         });
         (t, &LOGGER)
     }
+    ///tells the writer to end writing.
+    ///# Examples
+    ///```
+    ///fn main() {
+    ///    let (writer, logger) = glug::GLogger::setup();
+    ///    log::info!("logged a message");
+    ///    logger.end();
+    ///    writer.join().unwrap();
+    ///}
+    ///```
     pub fn end(&self) {
         if let Err(error) = self
             .channel
@@ -105,7 +129,7 @@ impl GWriter {
                 match signal {
                     GLoggerSignal::Flush => self.flush(),
                     GLoggerSignal::Stop => {
-                        println!("{}", color!(0));
+                        println!("{}", color!(0)); //reset color to gracefully exit
                         return;
                     }
                 }
@@ -117,8 +141,8 @@ impl GWriter {
     }
     fn draw(&mut self) {
         for log in &self.logs {
-            println!(
-                "{}{}, {}",
+            eprintln!(
+                "{}{:<6}{}",
                 color!(self.log_colors[log.1 as usize - 1]),
                 log.1,
                 log.0
