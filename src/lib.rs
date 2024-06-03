@@ -4,7 +4,7 @@
 //!# How to use
 //!The `glug` logger uses a dedicated writer thread. This thread runs until told to stop. To stop
 //!the logger properly, it is a good idea to use `GLogger::end` and `JoinHandle::join` like so:
-//!(yes, this example is everywhere)
+//!(yes, this example is everywhere in this doc)
 //!```
 //!fn main() {
 //!    let (writer, logger) = glug::GLogger::setup();
@@ -16,3 +16,4 @@
 mod glogger;
 pub use glogger::Ansi8;
 pub use glogger::GLogger;
+pub use glogger::GLoggerOptions;

@@ -8,10 +8,35 @@ use std::sync::mpsc::channel;
 use std::sync::OnceLock;
 use std::{thread, usize};
 type LogMessage = Result<(String, Level), GLoggerSignal>;
-///The logger. Use setup() to initiate and end() to stop.
+///The logger. Use `setup` or `setup_with_options` to initiate and `end` to stop.
 #[derive(Clone)]
 pub struct GLogger {
     channel: OnceLock<mpsc::Sender<LogMessage>>,
+}
+///Ways to configure the logger. These include: colors. 0.2.0 will expand these, if it ever gets
+///made.
+///
+///# Examples
+///```
+/////build with default
+///let options = GLoggerOptions::default();
+///options.colors = [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow];
+///```
+///
+///```
+/////do it the easy way
+///let options = GLoggerOptions {colors: [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow]}
+///```
+#[derive(Copy, Clone)]
+pub struct GLoggerOptions {
+    pub colors: [Ansi8; 5],
+}
+impl std::default::Default for GLoggerOptions {
+    fn default() -> Self {
+        Self {
+            colors: [Red, Yellow, Green, Blue, Default],
+        }
+    }
 }
 #[derive(Debug, Copy, Clone)]
 enum GLoggerSignal {
@@ -54,7 +79,7 @@ impl Log for GLogger {
 impl GLogger {
     ///sets up the logger. The JoinHandle can
     ///be used to wait for writing to end, and the logger can tell the writing thread to
-    ///end.
+    ///end. Interchangable with `setup_with_options`.
     ///**The writing thread will only end if told to.**
     ///# Examples
     ///```
@@ -66,6 +91,23 @@ impl GLogger {
     ///}
     ///```
     pub fn setup() -> (thread::JoinHandle<()>, &'static GLogger) {
+        Self::setup_with_options(GLoggerOptions::default())
+    }
+    ///sets up the logger with options. Interchangable with `GLogger::setup`
+    ///# Examples
+    ///```
+    ///use glug::Ansi8;
+    ///fn main() {
+    ///    let (writer, logger) = glug::GLogger::setup_with_options(GLoggerOptions { colors:
+    ///    [Ansi8::Red,Ansi8::Yellow,Ansi8::Cyan,Ansi8::Magenta,Ansi8::Blue]});
+    ///    log::info!("logged a message");
+    ///    logger.end();
+    ///    writer.join().unwrap();
+    ///}
+    ///```
+    pub fn setup_with_options(
+        options: GLoggerOptions,
+    ) -> (thread::JoinHandle<()>, &'static GLogger) {
         static LOGGER: GLogger = GLogger {
             channel: OnceLock::new(),
         };
@@ -81,13 +123,10 @@ impl GLogger {
                 channel: receiver,
                 logs: vec![],
                 signals: vec![],
-                log_colors: [
-                    Red as usize,
-                    Yellow as usize,
-                    Green as usize,
-                    Blue as usize,
-                    Default as usize,
-                ],
+                log_colors: options.colors.map(|c| c as usize),
+                log_counts: [0; 5],
+                termwidth: 0,
+                termlength: 0,
             }
             .log_loop();
         });
@@ -119,6 +158,19 @@ struct GWriter {
     logs: Vec<(String, Level)>,
     signals: Vec<GLoggerSignal>,
     log_colors: [usize; 5],
+    log_counts: [usize; 5],
+    termwidth: usize,
+    termlength: usize,
+}
+fn nice_lines(string: &str, max_len: usize, level: Level) -> Vec<(String, Level)> {
+    let mut lines = vec![];
+    string.split('\n').for_each(|line| {
+        line.chars()
+            .collect::<Box<[char]>>()
+            .chunks(max_len)
+            .for_each(|l| lines.push((String::from_iter(l), level)))
+    });
+    lines
 }
 impl GWriter {
     fn log_loop(&mut self) {
@@ -129,7 +181,7 @@ impl GWriter {
                 match signal {
                     GLoggerSignal::Flush => self.flush(),
                     GLoggerSignal::Stop => {
-                        println!("{}", color!(0)); //reset color to gracefully exit
+                        eprint!("{}\n", color!(0)); //reset color to gracefully exit
                         return;
                     }
                 }
@@ -140,21 +192,47 @@ impl GWriter {
         todo!()
     }
     fn draw(&mut self) {
+        let length = self.termlength - 6;
         for log in &self.logs {
             eprintln!(
-                "{}{:<6}{}",
+                "{}{:<length$} ",
                 color!(self.log_colors[log.1 as usize - 1]),
-                log.1,
-                log.0
+                log.0,
             );
         }
+        for i in 0..self.termwidth {
+            eprint!("{}", set_cursor!(i, length + 2));
+            for j in 0..5 {
+                eprint!(
+                    "{}{} ",
+                    match self.log_counts[j] >= self.termwidth - i {
+                        true => color!(7),
+                        false => color!(27),
+                    },
+                    color!(self.log_colors[j])
+                );
+            }
+            eprint!("{}", color!(Reset as usize))
+        }
     }
+
     fn read(&mut self) {
         self.logs.clear();
         self.signals.clear();
+        (self.termwidth, self.termlength) = match termsize::get() {
+            Some(size) => (size.rows as usize, size.cols as usize),
+            None => (0, 0),
+        };
         while let Ok(message) = self.channel.try_recv() {
             match message {
-                Ok(log) => self.logs.push(log),
+                Ok(log) => {
+                    self.log_counts[log.1 as usize - 1] += 1;
+                    self.logs.append(&mut nice_lines(
+                        &format!("{:<6}{}", log.1, log.0),
+                        self.termlength - 6,
+                        log.1,
+                    ));
+                }
                 Err(signal) => self.signals.push(signal),
             }
         }
