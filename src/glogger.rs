@@ -19,13 +19,14 @@ pub struct GLogger {
 ///# Examples
 ///```
 /////build with default
-///let options = GLoggerOptions::default();
-///options.colors = [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow];
+///use glug::Ansi8;
+///let options = glug::GLoggerOptions {colors: [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow], ..Default::default()};
 ///```
 ///
 ///```
 /////do it the easy way
-///let options = GLoggerOptions {colors: [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow]}
+///use glug::Ansi8;
+///let options = glug::GLoggerOptions {colors: [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow]};
 ///```
 #[derive(Copy, Clone)]
 pub struct GLoggerOptions {
@@ -98,7 +99,7 @@ impl GLogger {
     ///```
     ///use glug::Ansi8;
     ///fn main() {
-    ///    let (writer, logger) = glug::GLogger::setup_with_options(GLoggerOptions { colors:
+    ///    let (writer, logger) = glug::GLogger::setup_with_options(glug::GLoggerOptions { colors:
     ///    [Ansi8::Red,Ansi8::Yellow,Ansi8::Cyan,Ansi8::Magenta,Ansi8::Blue]});
     ///    log::info!("logged a message");
     ///    logger.end();
@@ -221,7 +222,7 @@ impl GWriter {
         self.signals.clear();
         (self.termwidth, self.termlength) = match termsize::get() {
             Some(size) => (size.rows as usize, size.cols as usize),
-            None => (0, 0),
+            None => (7, 7),
         };
         while let Ok(message) = self.channel.try_recv() {
             match message {

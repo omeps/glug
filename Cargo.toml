@@ -1,13 +1,16 @@
+[examples]
+
 [package]
 categories = ["development-tools::debugging"]
 description = "A logging impementation for  log  with graphics in the terminal"
 name = "glug"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 repository = "https://github.com/omeps/glug"
 keywords = ["logging","log", "logger"]
 license = "MIT"
-
+readme = "README.md"
 [dependencies]
 log = "0.4.21"
 termsize = "0.1.6"
+[dev-dependencies]
