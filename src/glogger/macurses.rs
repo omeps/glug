@@ -1,16 +1,9 @@
-use std::fmt::Display;
-
 macro_rules! set_cursor {
     ($l:expr,$c:expr) => {
         format!("\x1b[{};{}H", $l, $c)
     };
     () => {
         "\x1b[H"
-    };
-}
-macro_rules! clear_to_eol {
-    () => {
-        "\x1b[0J"
     };
 }
 macro_rules! color {
@@ -37,5 +30,4 @@ pub enum Ansi8 {
     ///not to be confused with Default
     Reset = 0,
 }
-use Ansi8::*;
-pub(crate) use {clear_to_eol, color, set_cursor};
+pub(crate) use {color, set_cursor};
