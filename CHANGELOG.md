@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixes to examples in `glogger.rs` related to GLoggerOptions
 
-- Fixed crashing on unknown terminal size -- unknown terminal size should panic as it's unusable
+- Fixed crashing on unknown terminal size -- unknown terminal size should panic as it's unusable, but does not here
 
 ## [0.1.0] - 2024-05-02
 
