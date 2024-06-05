@@ -3,6 +3,7 @@ use log::{set_logger, Level, Log, Record};
 pub use macurses::Ansi8;
 use macurses::Ansi8::*;
 use macurses::*;
+use std::io::Write;
 use std::sync::mpsc;
 use std::sync::mpsc::channel;
 use std::sync::OnceLock;
@@ -28,14 +29,16 @@ pub struct GLogger {
 ///use glug::Ansi8;
 ///let options = glug::GLoggerOptions {colors: [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow]};
 ///```
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct GLoggerOptions {
     pub colors: [Ansi8; 5],
+    pub save_to_file: Option<String>,
 }
 impl std::default::Default for GLoggerOptions {
     fn default() -> Self {
         Self {
             colors: [Red, Yellow, Green, Blue, Default],
+            save_to_file: None,
         }
     }
 }
@@ -128,6 +131,16 @@ impl GLogger {
                 log_counts: [0; 5],
                 termwidth: 0,
                 termlength: 0,
+                file: match options.save_to_file {
+                    Some(path) => match std::fs::File::create(path) {
+                        Ok(f) => Some(f),
+                        Err(e) => {
+                            log::warn!("GLogger: failed to open file due to {}", e);
+                            None
+                        }
+                    },
+                    None => None,
+                },
             }
             .log_loop();
         });
@@ -162,6 +175,7 @@ struct GWriter {
     log_counts: [usize; 5],
     termwidth: usize,
     termlength: usize,
+    file: Option<std::fs::File>,
 }
 fn nice_lines(string: &str, max_len: usize, level: Level) -> Vec<(String, Level)> {
     let mut lines = vec![];
@@ -222,19 +236,45 @@ impl GWriter {
         self.signals.clear();
         (self.termwidth, self.termlength) = match termsize::get() {
             Some(size) => (size.rows as usize, size.cols as usize),
-            None => (7, 7),
+            None => {
+                panic!("[glug] could not determine terminal size. Use another terminal or logger")
+            }
         };
+        let mut messages_received = 0;
         while let Ok(message) = self.channel.try_recv() {
+            messages_received += 1;
             match message {
                 Ok(log) => {
                     self.log_counts[log.1 as usize - 1] += 1;
-                    self.logs.append(&mut nice_lines(
-                        &format!("{:<6}{}", log.1, log.0),
-                        self.termlength - 6,
-                        log.1,
-                    ));
+                    let formatted = format!("{:<6}{}", log.1, log.0);
+                    if let Some(file) = &mut self.file {
+                        match file.write(format!("{}\n", formatted).as_bytes()) {
+                            Ok(size) => {
+                                if size <= formatted.as_bytes().len() {
+                                    if let Err(e) = file.sync_all() {
+                                        log::error!(
+                                            "[glug] file sync failed. Check out what happened. Error: {}",e
+                                        );
+                                    }
+                                    self.file = None;
+                                }
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "[glug] file write failed. Check out what happened. Error: {}",
+                                    e
+                                );
+                                self.file = None;
+                            }
+                        }
+                    }
+                    self.logs
+                        .append(&mut nice_lines(&formatted, self.termlength - 6, log.1));
                 }
                 Err(signal) => self.signals.push(signal),
+            }
+            if messages_received >= 100 {
+                return;
             }
         }
     }
