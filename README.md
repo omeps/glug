@@ -7,4 +7,4 @@ the sidebar (the meat and potatoes of glug) will show you
 what types of logs you're getting and how many. Is this useful? 
 Maybe. Is it cool? Maybe.
 # How to use
-Read the documentation or the examples.
+This is the repo for a crate on crates.io. Read the documentation or the examples.
