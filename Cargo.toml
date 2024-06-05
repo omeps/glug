@@ -14,3 +14,15 @@ readme = "README.md"
 log = "0.4.21"
 termsize = "0.1.6"
 [dev-dependencies]
+rand = "0.8.5"
+
+[[example]]
+name = "logging_messages"
+[[example]]
+name = "lots_of_messages"
+[[example]]
+name = "long_messages"
+[[example]]
+name = "so_many_messages"
+[[example]]
+name = "logs_to_file"
