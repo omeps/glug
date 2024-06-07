@@ -4,7 +4,7 @@
 categories = ["development-tools::debugging"]
 description = "A logging impementation for  log  with graphics in the terminal"
 name = "glug"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 repository = "https://github.com/omeps/glug"
 keywords = ["logging","log", "logger"]
