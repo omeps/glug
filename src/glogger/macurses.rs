@@ -12,7 +12,7 @@ macro_rules! color {
     };
 }
 #[repr(usize)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 ///the numbers for the basic ANSI colors set by the terminal. These are the **widely used** colors for
 ///the terminal, not specific ones. They **may not be the right color** as they are terminal
 ///dependent.

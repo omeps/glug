@@ -14,6 +14,6 @@
 //!}
 //!```
 mod glogger;
-pub use glogger::Ansi8;
+pub use glogger::options;
 pub use glogger::GLogger;
 pub use glogger::GLoggerOptions;
