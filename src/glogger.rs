@@ -1,35 +1,52 @@
 mod macurses;
-use log::{set_logger, Level, Log, Record};
+pub mod termpin;
+use log::{set_logger, warn, Level, Log, Record};
+pub use macurses::Ansi8;
 use macurses::Ansi8::*;
 use macurses::*;
-use options::*;
-use std::fmt::Display;
-use std::io::Write;
+use options::GStoreOptions;
+use std::cmp::max;
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
+use std::mem::swap;
 use std::sync::mpsc;
 use std::sync::mpsc::channel;
 use std::sync::OnceLock;
-use std::thread::ThreadId;
+use std::thread::{JoinHandle, ThreadId};
 use std::{thread, usize};
+use termpin::Box2D;
 type LogMessage = Result<(String, Level, GLoggerOptionalInfo), GLoggerSignal>;
 ///The logger. Use `setup` or `setup_with_options` to initiate and `end` to stop.
-#[derive(Clone)]
 pub struct GLogger {
     channel: OnceLock<mpsc::Sender<LogMessage>>,
-    conf: OnceLock<GLoggerOptions>,
+    enabled: OnceLock<GLoggerOptionalQuestions>,
 }
-///Ways to configure the logger. These include: colors. 0.2.0 will expand these, if it ever gets
-///made.
+#[derive(Debug)]
+struct GLoggerOptionalQuestions {
+    thread_fingerprint: Option<()>,
+    timestamp: Option<()>,
+}
+impl From<GLoggerOptions> for GLoggerOptionalQuestions {
+    fn from(value: GLoggerOptions) -> Self {
+        Self {
+            thread_fingerprint: value.record_threads.map(|_| ()),
+            timestamp: value.timestamps,
+        }
+    }
+}
+///Ways to configure the logger.
+///
 ///
 ///# Examples
 ///```
-/////build with default. This is very important when trying to be version-compatible. This seemed a
-/////little more elegant than getter/setters.
+/////build with default.
+///
 ///use glug::Ansi8;
 ///let options = glug::GLoggerOptions {colors: [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow], ..Default::default()};
 ///```
 ///
 ///```
-/////do it the janky way
+/////try your best.
 ///use glug::Ansi8;
 ///let options = glug::GLoggerOptions {
 ///     colors: [Ansi8::Red,
@@ -39,39 +56,55 @@ pub struct GLogger {
 ///         Ansi8::Yellow],
 ///     save_to_file: None,
 ///     record_threads: None,
-///     max_messages_per_loop: Some(100)
+///     max_messages_per_loop: Some(100),
+///     timestamps: Some(()),
 ///};
 ///```
 #[derive(Clone, Debug)]
 pub struct GLoggerOptions {
-    ///which colors to use for logging. 0: Error, 5: Trace
+    ///which colors to use for logging. 0: Error, 4: Trace
     pub colors: [Ansi8; 5],
     ///what file to save logs to, if one is supplied.
     pub save_to_file: Option<String>,
     ///How to record which threads log what messages, if at all.
-    pub record_threads: Option<RecordThreadsOptions>,
+    pub record_threads: Option<options::RecordThreadsOptions>,
     ///how many messages to read before printing them.
     pub max_messages_per_loop: Option<usize>,
+    ///whether or not to record timestamps.
+    pub timestamps: Option<()>,
 }
 pub mod options {
     //!options to supply to `GLoggerOptions`.
     pub use super::macurses::Ansi8;
-    ///Options for how to record threads, including `seperate_histograms` and `summary`.
+    use super::GLoggerOptionalInfo;
+    use log::Level;
+    use std::io::Write;
+    ///Options for how to record threads, including `separate_histograms` and `summary`.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct RecordThreadsOptions {
         ///use only with big terminal.
-        pub seperate_histograms: bool,
+        pub separate_histograms: bool,
         ///summary of logs printed at end of logging. Make sure the logger is quit properly.
         pub summary: bool,
+    }
+    pub struct GStoreOptions<'a, K: PartialEq> {
+        pub log_colors: [usize; 5],
+        pub separate_log_counts: Option<Box<dyn Fn(GLoggerOptionalInfo) -> Option<K>>>,
+        pub writers: &'a mut [Result<Box<dyn Write>, std::io::Error>],
+        pub format: &'a dyn Fn((String, Level, GLoggerOptionalInfo)) -> String,
     }
 }
 
 impl std::default::Default for GLoggerOptions {
     fn default() -> Self {
         Self {
+            timestamps: Some(()),
             colors: [Red, Yellow, Green, Blue, Default],
             save_to_file: None,
-            record_threads: None,
+            record_threads: Some(options::RecordThreadsOptions {
+                separate_histograms: false,
+                summary: false,
+            }),
             max_messages_per_loop: Some(100),
         }
     }
@@ -82,17 +115,23 @@ enum GLoggerSignal {
     Stop,
 }
 #[derive(Clone)]
-struct GLoggerOptionalInfo {
+pub struct GLoggerOptionalInfo {
     thread_fingerprint: Option<(ThreadId, Option<String>)>,
+    timestamp: Option<chrono::DateTime<chrono::Local>>,
 }
+
 impl Display for GLoggerOptionalInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let formatted_fingerprint = if let Some((_, Some(name))) = &self.thread_fingerprint {
-            format!("[{}]", name.to_string())
-        } else {
-            "".to_string()
+        let formatted_fingerprint = match &self.thread_fingerprint {
+            Some((_, Some(name))) => format!("[{}]", name.to_string()),
+            Some((id, None)) => format!("[id: {:?}]", id),
+            None => "".to_string(),
         };
-        write!(f, "{}", formatted_fingerprint)
+        let timestamp = match &self.timestamp {
+            Some(time) => format!("@{:?}", time),
+            None => "".to_string(),
+        };
+        write!(f, "{}{}", formatted_fingerprint, timestamp)
     }
 }
 impl Log for GLogger {
@@ -106,10 +145,10 @@ impl Log for GLogger {
         let log_level = record.level();
         let info = GLoggerOptionalInfo {
             thread_fingerprint: if let Some(_) = &self
-                .conf
+                .enabled
                 .get()
                 .expect("tried to log on a not set-up logger")
-                .record_threads
+                .thread_fingerprint
             {
                 Some((
                     std::thread::current().id(),
@@ -118,6 +157,16 @@ impl Log for GLogger {
                         Some(name) => Some(name.to_owned()),
                     },
                 ))
+            } else {
+                None
+            },
+            timestamp: if let Some(_) = &self
+                .enabled
+                .get()
+                .expect("tried to log on a not set-up logger")
+                .timestamp
+            {
+                Some(chrono::Local::now())
             } else {
                 None
             },
@@ -146,6 +195,18 @@ impl Log for GLogger {
         }
     }
 }
+pub struct GLoggerRef {
+    pub handle: Option<JoinHandle<()>>,
+    pub logger: &'static GLogger,
+}
+impl Drop for GLoggerRef {
+    fn drop(&mut self) {
+        self.logger.end();
+        let mut handle = None;
+        swap(&mut handle, &mut self.handle);
+        handle.map(|h| h.join());
+    }
+}
 impl GLogger {
     ///sets up the logger. The JoinHandle can
     ///be used to wait for writing to end, and the logger can tell the writing thread to
@@ -154,13 +215,11 @@ impl GLogger {
     ///# Examples
     ///```
     ///fn main() {
-    ///    let (writer, logger) = glug::GLogger::setup();
+    ///    let gref = glug::GLogger::setup();
     ///    log::info!("logged a message");
-    ///    logger.end();
-    ///    writer.join().unwrap();
     ///}
     ///```
-    pub fn setup() -> (thread::JoinHandle<()>, &'static GLogger) {
+    pub fn setup() -> GLoggerRef {
         Self::setup_with_options(GLoggerOptions::default())
     }
     ///sets up the logger with options. Interchangable with `GLogger::setup`
@@ -168,19 +227,15 @@ impl GLogger {
     ///```
     ///use glug::Ansi8;
     ///fn main() {
-    ///    let (writer, logger) = glug::GLogger::setup_with_options(glug::GLoggerOptions { colors:
-    ///    [Ansi8::Red,Ansi8::Yellow,Ansi8::Cyan,Ansi8::Magenta,Ansi8::Blue]});
+    ///    let gref = glug::GLogger::setup_with_options(glug::GLoggerOptions { colors:
+    ///    [Ansi8::Red,Ansi8::Yellow,Ansi8::Cyan,Ansi8::Magenta,Ansi8::Blue], ..Default::default()});
     ///    log::info!("logged a message");
-    ///    logger.end();
-    ///    writer.join().unwrap();
     ///}
     ///```
-    pub fn setup_with_options(
-        options: GLoggerOptions,
-    ) -> (thread::JoinHandle<()>, &'static GLogger) {
+    pub fn setup_with_options(options: GLoggerOptions) -> GLoggerRef {
         static LOGGER: GLogger = GLogger {
             channel: OnceLock::new(),
-            conf: OnceLock::new(),
+            enabled: OnceLock::new(),
         };
         set_logger(&LOGGER).expect("[glug] tried to set up logger twice");
         log::set_max_level(log::LevelFilter::Trace);
@@ -189,47 +244,77 @@ impl GLogger {
             .channel
             .set(sender)
             .expect("[glug] tried to set up logger twice");
-        LOGGER.conf.set(options.clone()).unwrap();
+        LOGGER.enabled.set(options.clone().into()).unwrap();
+
         let writer_func = move || {
+            let file_writer: Option<Result<Box<dyn std::io::Write>, _>> = match options.save_to_file
+            {
+                Some(path) => Some(match std::fs::File::create(path) {
+                    Ok(f) => Ok(Box::new(f) as Box<dyn std::io::Write>),
+                    Err(e) => {
+                        log::warn!("[glug] failed to open file due to {}", e);
+                        Err(e)
+                    }
+                }),
+                None => None,
+            };
+            let mut writers: Vec<Result<Box<dyn std::io::Write>, std::io::Error>> = vec![];
+            match file_writer {
+                Some(Ok(f)) => writers.push(Ok(f)),
+                Some(Err(e)) => writers.push(Err(e)),
+                None => (),
+            }
+            let separate_log_counts = options.record_threads.map(|_| {
+                Box::new(|g: GLoggerOptionalInfo| g.thread_fingerprint.map(|f| f.0))
+                    as Box<dyn Fn(GLoggerOptionalInfo) -> Option<_>>
+            });
+            let format = Box::new(|p: (String, Level, GLoggerOptionalInfo)| {
+                format!("{:<6}{} {}", p.1, p.2, p.0)
+            });
+            let mut terminal = termpin::DivNode::Element(Box::new(termpin::elements::draw_logs));
+            terminal.place(
+                termpin::DivNode::Element(Box::new(termpin::elements::draw_histogram)),
+                (termpin::Direction::Right, Box::new(|x| max(x, 6) - 6)),
+            );
+            terminal.place(
+                termpin::DivNode::Element(Box::new(termpin::elements::summary)),
+                (termpin::Direction::Down, Box::new(|x| max(x, 6) - 6)),
+            );
             GWriter {
+                terminal,
                 channel: receiver,
-                logs: vec![],
                 signals: vec![],
-                log_colors: options.colors.map(|c| c as usize),
-                log_counts: vec![[0; 5]],
-                termwidth: 0,
-                termlength: 0,
-                max_messages_per_loop: options.max_messages_per_loop,
-                file: match options.save_to_file {
-                    Some(path) => match std::fs::File::create(path) {
-                        Ok(f) => Some(f),
-                        Err(e) => {
-                            log::warn!("[glug] failed to open file due to {}", e);
-                            None
-                        }
-                    },
-                    None => None,
+                bound: Box2D {
+                    x: 0,
+                    y: 0,
+                    length: 0,
+                    height: 0,
                 },
-                record_threads: options.record_threads,
+                max_messages_per_loop: options.max_messages_per_loop,
+                store: GStoreOptions {
+                    log_colors: options.colors.map(|c| c as usize),
+                    separate_log_counts,
+                    writers: &mut writers,
+                    format: &format,
+                }
+                .into(),
             }
             .log_loop();
         };
         let t = thread::Builder::new()
             .name("glug writer".to_string())
             .spawn(writer_func);
-        (
-            t.expect("unable to name writer thread `glug writer`"),
-            &LOGGER,
-        )
+        GLoggerRef {
+            handle: Some(t.expect("unable to name writer thread `glug writer`")),
+            logger: &LOGGER,
+        }
     }
     ///tells the writer to end writing.
     ///# Examples
     ///```
     ///fn main() {
-    ///    let (writer, logger) = glug::GLogger::setup();
+    ///    let gref = glug::GLogger::setup();
     ///    log::info!("logged a message");
-    ///    logger.end();
-    ///    writer.join().unwrap();
     ///}
     ///```
     pub fn end(&self) {
@@ -243,41 +328,108 @@ impl GLogger {
         }
     }
 }
-struct GWriter {
+pub mod gstore {
+    use super::{options::GStoreOptions, GLoggerOptionalInfo};
+    use log::Level;
+    use std::{
+        collections::{HashMap, VecDeque},
+        hash::Hash,
+        io::Write,
+    };
+    pub struct GStore<'a, K: Eq + Hash> {
+        logs: VecDeque<(String, Level, GLoggerOptionalInfo)>,
+        pub counts_total: [usize; 5],
+        pub counts_keyed: Option<(
+            Box<dyn Fn(GLoggerOptionalInfo) -> Option<K>>,
+            HashMap<K, [usize; 5]>,
+        )>,
+        pub log_colors: [usize; 5],
+        writers: &'a mut [Result<Box<dyn Write>, std::io::Error>],
+        format: &'a dyn Fn((String, Level, GLoggerOptionalInfo)) -> String,
+    }
+    impl<'a, K: Eq + Hash> From<GStoreOptions<'a, K>> for GStore<'a, K> {
+        fn from(value: GStoreOptions<'a, K>) -> Self {
+            Self {
+                logs: VecDeque::with_capacity(512),
+                counts_total: [0; 5],
+                counts_keyed: match value.separate_log_counts {
+                    Some(f) => Some((f, HashMap::new())),
+                    None => None,
+                },
+                writers: value.writers,
+                format: value.format,
+                log_colors: value.log_colors,
+            }
+        }
+    }
+    impl<'a, K: Eq + Hash> GStore<'a, K> {
+        pub fn insert(&mut self, log: (String, Level, GLoggerOptionalInfo)) {
+            let (level, info) = (log.1, log.2.clone());
+            let message = (self.format)(log);
+            for writer in &mut *self.writers {
+                if let Ok(w) = writer {
+                    match write!(w, "{}{}", message, '\n') {
+                        Ok(_) => (),
+                        Err(e) => *writer = Err(e),
+                    }
+                }
+            }
+            self.counts_total[level as usize - 1] += 1;
+            if let Some((get_key, store)) = &mut self.counts_keyed {
+                let key = get_key(info.clone());
+                match key.map(|key| (*store).get_mut(&key)) {
+                    Some(Some(value)) => {
+                        value[level as usize - 1] += 1;
+                    }
+                    Some(None) => {
+                        store.insert(
+                            get_key(info.clone()).unwrap(),
+                            [0, 1, 2, 3, 4].map(|i| match i == level as usize - 1 {
+                                true => 1,
+                                false => 0,
+                            }),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            self.logs.truncate(511);
+            self.logs.push_front((message, level, info));
+        }
+        pub fn logs(&self) -> &VecDeque<(String, Level, GLoggerOptionalInfo)> {
+            &self.logs
+        }
+    }
+}
+struct GWriter<'a, K: Eq + Hash> {
     //necessary fields
+    terminal: termpin::DivNode<K>,
     channel: mpsc::Receiver<LogMessage>,
-    logs: Vec<(String, Level)>,
     signals: Vec<GLoggerSignal>,
-    log_colors: [usize; 5],
-    log_counts: Vec<[usize; 5]>,
-    termwidth: usize,
-    termlength: usize,
+    bound: Box2D<usize>,
     //fields for config
     max_messages_per_loop: Option<usize>,
-    file: Option<std::fs::File>,
-    record_threads: Option<RecordThreadsOptions>,
+    store: gstore::GStore<'a, K>,
 }
-fn nice_lines(string: &str, max_len: usize, level: Level) -> Vec<(String, Level)> {
-    let mut lines = vec![];
-    string.split('\n').for_each(|line| {
-        line.chars()
-            .collect::<Box<[char]>>()
-            .chunks(max_len)
-            .for_each(|l| lines.push((String::from_iter(l), level)))
-    });
-    lines
-}
-impl GWriter {
+
+impl<'a, K: Eq + Hash + Debug> GWriter<'a, K> {
     fn log_loop(&mut self) {
         loop {
             self.read();
-            self.draw();
+            if let Err(e) = self.draw() {
+                warn!("{}", e)
+            }
             for signal in &self.signals {
                 match signal {
                     GLoggerSignal::Flush => self.flush(),
                     GLoggerSignal::Stop => {
                         self.max_messages_per_loop = None;
-                        eprint!("{}\n", color!(0)); //reset color to gracefully exit
+                        eprint!(
+                            "{}{}{}",
+                            color!(0),
+                            macurses::set_cursor!(self.bound.height, 0),
+                            macurses::show_cursor!()
+                        ); //reset color to gracefully exit
                         return;
                     }
                 }
@@ -287,36 +439,14 @@ impl GWriter {
     fn flush(&self) {
         todo!()
     }
-    fn draw(&mut self) {
-        let length = self.termlength - 6;
-        for log in &self.logs {
-            eprintln!(
-                "{}{:<length$} ",
-                color!(self.log_colors[log.1 as usize - 1]),
-                log.0,
-            );
-        }
-        for i in 0..self.termwidth {
-            eprint!("{}", set_cursor!(i, length + 2));
-            for j in 0..5 {
-                eprint!(
-                    "{}{} ",
-                    match self.log_counts[0][j] >= self.termwidth - i {
-                        true => color!(7),
-                        false => color!(27),
-                    },
-                    color!(self.log_colors[j])
-                );
-            }
-            eprint!("{}", color!(Reset as usize))
-        }
+    fn draw(&mut self) -> Result<(), String> {
+        self.terminal.descend(self.bound, &self.store)
     }
 
     fn read(&mut self) {
-        self.logs.clear();
         self.signals.clear();
-        (self.termwidth, self.termlength) = match termsize::get() {
-            Some(size) => (size.rows as usize, size.cols as usize),
+        self.bound = match termsize::get() {
+            Some(size) => size.into(),
             None => {
                 panic!("[glug] could not determine terminal size. Use another terminal or logger")
             }
@@ -326,32 +456,7 @@ impl GWriter {
             messages_received += 1;
             match message {
                 Ok(log) => {
-                    self.log_counts[log.1 as usize - 1] += 1;
-                    let formatted = format!("{:<6}{} {}", log.1, log.2, log.0);
-                    if let Some(file) = &mut self.file {
-                        match file.write(format!("{}\n", formatted).as_bytes()) {
-                            Ok(size) => {
-                                if size <= formatted.as_bytes().len() {
-                                    if let Err(e) = file.sync_all() {
-                                        log::error!(
-                                            "file sync failed. Check out what happened. Error: {}",
-                                            e
-                                        );
-                                    }
-                                    self.file = None;
-                                }
-                            }
-                            Err(e) => {
-                                log::error!(
-                                    "file write failed. Check out what happened. Error: {}",
-                                    e
-                                );
-                                self.file = None;
-                            }
-                        }
-                    }
-                    self.logs
-                        .append(&mut nice_lines(&formatted, self.termlength - 6, log.1));
+                    self.store.insert(log);
                 }
                 Err(signal) => self.signals.push(signal),
             }

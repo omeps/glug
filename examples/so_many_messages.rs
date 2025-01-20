@@ -1,7 +1,7 @@
 use log::Level::*;
 use rand::Rng;
 fn main() {
-    let (writer, logger) = glug::GLogger::setup();
+    let _gref = glug::GLogger::setup();
     let mut threads = (0..5).map(|_| {
         std::thread::spawn(|| {
             let mut rng = rand::thread_rng();
@@ -21,6 +21,4 @@ fn main() {
         })
     });
     threads.try_for_each(|t| t.join()).unwrap();
-    logger.end();
-    writer.join().unwrap();
 }

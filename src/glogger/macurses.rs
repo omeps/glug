@@ -6,6 +6,16 @@ macro_rules! set_cursor {
         "\x1b[H"
     };
 }
+macro_rules! hide_cursor {
+    () => {
+        "\x1b[?25l"
+    };
+}
+macro_rules! show_cursor {
+    () => {
+        "\x1b[?25h"
+    };
+}
 macro_rules! color {
     ($c:expr) => {
         format!("\x1b[{}m", $c)
@@ -30,4 +40,4 @@ pub enum Ansi8 {
     ///not to be confused with Default
     Reset = 0,
 }
-pub(crate) use {color, set_cursor};
+pub(crate) use {color, hide_cursor, set_cursor, show_cursor};

@@ -1,9 +1,9 @@
 use std::thread;
 
 fn main() {
-    let (writer, logger) = glug::GLogger::setup_with_options(glug::GLoggerOptions {
+    let _gref = glug::GLogger::setup_with_options(glug::GLoggerOptions {
         record_threads: Some(glug::options::RecordThreadsOptions {
-            seperate_histograms: false,
+            separate_histograms: false,
             summary: false,
         }),
         ..Default::default()
@@ -14,6 +14,4 @@ fn main() {
         .unwrap();
     log::info!("hello from main!");
     other_thread.join().unwrap();
-    logger.end();
-    writer.join().unwrap();
 }
