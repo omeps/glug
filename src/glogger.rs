@@ -11,6 +11,7 @@ use std::hash::Hash;
 use std::mem::swap;
 use std::sync::mpsc;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::thread::{JoinHandle, ThreadId};
 use std::{thread, usize};
@@ -26,10 +27,14 @@ struct GLoggerOptionalQuestions {
     thread_fingerprint: Option<()>,
     timestamp: Option<()>,
 }
-impl From<GLoggerOptions> for GLoggerOptionalQuestions {
-    fn from(value: GLoggerOptions) -> Self {
+impl<T: Eq + Hash + Debug> From<&GLoggerOptions<T>> for GLoggerOptionalQuestions {
+    fn from(value: &GLoggerOptions<T>) -> Self {
         Self {
-            thread_fingerprint: value.record_threads.map(|_| ()),
+            thread_fingerprint: if let Some(_) = &value.record_threads {
+                Some(())
+            } else {
+                None
+            },
             timestamp: value.timestamps,
         }
     }
@@ -42,12 +47,13 @@ impl From<GLoggerOptions> for GLoggerOptionalQuestions {
 /////build with default.
 ///
 ///use glug::Ansi8;
-///let options = glug::GLoggerOptions {colors: [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow], ..Default::default()};
+///let options = glug::GLoggerOptions::<std::thread::ThreadId> {colors: [Ansi8::Red,Ansi8::Blue,Ansi8::Green,Ansi8::Yellow,Ansi8::Yellow], ..Default::default()};
 ///```
 ///
 ///```
 /////try your best.
 ///use glug::Ansi8;
+///let terminal = glug::DivNode::<std::thread::ThreadId>::Element(std::sync::Arc::new(glug::elements::draw_logs));
 ///let options = glug::GLoggerOptions {
 ///     colors: [Ansi8::Red,
 ///         Ansi8::Blue,
@@ -58,10 +64,11 @@ impl From<GLoggerOptions> for GLoggerOptionalQuestions {
 ///     record_threads: None,
 ///     max_messages_per_loop: Some(100),
 ///     timestamps: Some(()),
+///     terminal,
 ///};
 ///```
-#[derive(Clone, Debug)]
-pub struct GLoggerOptions {
+#[derive(Clone)]
+pub struct GLoggerOptions<T: Eq + Hash + Debug> {
     ///which colors to use for logging. 0: Error, 4: Trace
     pub colors: [Ansi8; 5],
     ///what file to save logs to, if one is supplied.
@@ -72,6 +79,8 @@ pub struct GLoggerOptions {
     pub max_messages_per_loop: Option<usize>,
     ///whether or not to record timestamps.
     pub timestamps: Option<()>,
+    //how to log to the terminal, what draws to call
+    pub terminal: termpin::DivNode<T>,
 }
 pub mod options {
     //!options to supply to `GLoggerOptions`.
@@ -95,8 +104,25 @@ pub mod options {
     }
 }
 
-impl std::default::Default for GLoggerOptions {
+impl<T: Eq + Hash + Debug + 'static> std::default::Default for GLoggerOptions<T> {
     fn default() -> Self {
+        let mut terminal = termpin::DivNode::Element(Arc::new(termpin::elements::draw_logs));
+        terminal.place(
+            termpin::DivNode::Element(Arc::new(termpin::elements::vertical_bar)),
+            (termpin::Direction::Right, Arc::new(|x| max(x, 1) - 1)),
+        );
+        terminal.place(
+            termpin::DivNode::Element(Arc::new(termpin::elements::draw_histogram)),
+            (termpin::Direction::Right, Arc::new(|x| max(x, 6) - 6)),
+        );
+        terminal.place(
+            termpin::DivNode::Element(Arc::new(termpin::elements::horizontal_bar)),
+            (termpin::Direction::Down, Arc::new(|x| max(x, 1) - 1)),
+        );
+        terminal.place(
+            termpin::DivNode::Element(Arc::new(termpin::elements::summary)),
+            (termpin::Direction::Down, Arc::new(|x| max(x, 6) - 6)),
+        );
         Self {
             timestamps: Some(()),
             colors: [Red, Yellow, Green, Blue, Default],
@@ -106,6 +132,7 @@ impl std::default::Default for GLoggerOptions {
                 summary: false,
             }),
             max_messages_per_loop: Some(100),
+            terminal,
         }
     }
 }
@@ -220,7 +247,7 @@ impl GLogger {
     ///}
     ///```
     pub fn setup() -> GLoggerRef {
-        Self::setup_with_options(GLoggerOptions::default())
+        Self::setup_with_options(GLoggerOptions::<ThreadId>::default())
     }
     ///sets up the logger with options. Interchangable with `GLogger::setup`
     ///# Examples
@@ -232,7 +259,8 @@ impl GLogger {
     ///    log::info!("logged a message");
     ///}
     ///```
-    pub fn setup_with_options(options: GLoggerOptions) -> GLoggerRef {
+    pub fn setup_with_options(options: GLoggerOptions<ThreadId>) -> GLoggerRef {
+        eprint!(clear_screen!());
         static LOGGER: GLogger = GLogger {
             channel: OnceLock::new(),
             enabled: OnceLock::new(),
@@ -244,8 +272,7 @@ impl GLogger {
             .channel
             .set(sender)
             .expect("[glug] tried to set up logger twice");
-        LOGGER.enabled.set(options.clone().into()).unwrap();
-
+        LOGGER.enabled.set((&options).into()).unwrap();
         let writer_func = move || {
             let file_writer: Option<Result<Box<dyn std::io::Write>, _>> = match options.save_to_file
             {
@@ -271,17 +298,8 @@ impl GLogger {
             let format = Box::new(|p: (String, Level, GLoggerOptionalInfo)| {
                 format!("{:<6}{} {}", p.1, p.2, p.0)
             });
-            let mut terminal = termpin::DivNode::Element(Box::new(termpin::elements::draw_logs));
-            terminal.place(
-                termpin::DivNode::Element(Box::new(termpin::elements::draw_histogram)),
-                (termpin::Direction::Right, Box::new(|x| max(x, 6) - 6)),
-            );
-            terminal.place(
-                termpin::DivNode::Element(Box::new(termpin::elements::summary)),
-                (termpin::Direction::Down, Box::new(|x| max(x, 6) - 6)),
-            );
             GWriter {
-                terminal,
+                terminal: options.terminal,
                 channel: receiver,
                 signals: vec![],
                 bound: Box2D {

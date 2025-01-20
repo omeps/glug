@@ -6,8 +6,9 @@ use std::{
     hash::Hash,
     mem::swap,
     ops::{Add, Sub},
+    sync::Arc,
 };
-type DivLocation = Box<dyn FnMut(usize) -> usize>;
+type DivLocation = Arc<dyn Fn(usize) -> usize + Send + Sync>;
 #[derive(Debug, Copy, Clone)]
 pub struct Box2D<T> {
     pub x: T,
@@ -16,7 +17,7 @@ pub struct Box2D<T> {
     pub height: T,
 }
 impl<T: PartialOrd + Debug + Add<Output = T> + Sub<Output = T> + Copy> Box2D<T> {
-    fn div_hori(&self, div: &mut dyn FnMut(T) -> T) -> Result<(Box2D<T>, Box2D<T>), String> {
+    fn div_hori(&self, div: &dyn Fn(T) -> T) -> Result<(Box2D<T>, Box2D<T>), String> {
         let div = div(self.height);
         if self.height < div {
             return Err(format!(
@@ -36,7 +37,7 @@ impl<T: PartialOrd + Debug + Add<Output = T> + Sub<Output = T> + Copy> Box2D<T> 
             },
         ));
     }
-    fn div_vert(&self, div: &mut dyn FnMut(T) -> T) -> Result<(Box2D<T>, Box2D<T>), String> {
+    fn div_vert(&self, div: &dyn Fn(T) -> T) -> Result<(Box2D<T>, Box2D<T>), String> {
         let div = div(self.length);
         if self.length < div {
             return Err(format!(
@@ -73,10 +74,11 @@ impl From<termsize::Size> for Box2D<usize> {
         }
     }
 }
+#[derive(Clone)]
 pub enum DivNode<K: Eq + Hash> {
     SplitVert(DivLocation, Box<DivNode<K>>, Box<DivNode<K>>),
     SplitHori(DivLocation, Box<DivNode<K>>, Box<DivNode<K>>),
-    Element(Box<dyn FnMut(Box2D<usize>, &super::gstore::GStore<'_, K>)>),
+    Element(Arc<dyn Fn(Box2D<usize>, &super::gstore::GStore<'_, K>) + Send + Sync>),
     Empty,
 }
 impl<T: Eq + Hash> DivNode<T> {
@@ -87,13 +89,13 @@ impl<T: Eq + Hash> DivNode<T> {
     ) -> Result<(), String> {
         match self {
             Self::SplitVert(div, left, right) => {
-                let div = rect.div_vert(&mut **div)?;
+                let div = rect.div_vert(&**div)?;
                 let r = left.descend(div.0, store);
                 right.descend(div.1, store)?;
                 r?
             }
             Self::SplitHori(div, top, bottom) => {
-                let div = rect.div_hori(&mut **div)?;
+                let div = rect.div_hori(&**div)?;
                 let r = top.descend(div.0, store);
                 bottom.descend(div.1, store)?;
                 r?
@@ -170,6 +172,20 @@ pub mod elements {
                     color!(store.log_colors[i])
                 );
             }
+        }
+    }
+    pub fn horizontal_bar<K: Eq + Hash>(bound: UBox, _: &GStore<K>) {
+        eprint!("{}{}", color!(0), hide_cursor!());
+        eprint!("{}", set_cursor!(bound.y, bound.x));
+        for _ in bound.x..bound.length {
+            eprint!("=")
+        }
+    }
+    pub fn vertical_bar<K: Eq + Hash>(bound: UBox, _: &GStore<K>) {
+        eprint!("{}{}", color!(0), hide_cursor!());
+        eprint!("{}", set_cursor!(bound.y, bound.x));
+        for y in bound.y..bound.height {
+            eprint!("{}|", set_cursor!(bound.y + y, bound.x))
         }
     }
     pub fn summary<K: Eq + Hash + Debug>(bound: UBox, store: &GStore<K>) {
